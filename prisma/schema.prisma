@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum ConversionStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+model User {
+  id                String    @id @default(uuid()) @db.Uuid
+  name              String?
+  email             String    @unique
+  supabaseUserId    String    @unique @map("supabase_user_id")
+  stripeCustomerId  String?   @map("stripe_customer_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  projects      Project[]
+  subscription  Subscription?
+  usage         Usage[]
+
+  @@map("users")
+}
+
+model Project {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  name            String
+  description     String?
+  sourceTool      String?   @map("source_tool")
+  targetPlatform  String?   @map("target_platform")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceFiles     SourceFile[]
+  parsedArtifacts ParsedArtifact[]
+  canonicalModels CanonicalModel[]
+  conversionRuns  ConversionRun[]
+
+  @@index([userId])
+  @@map("projects")
+}
+
+model SourceFile {
+  id            String    @id @default(uuid()) @db.Uuid
+  projectId     String    @map("project_id") @db.Uuid
+  filename      String
+  storagePath   String    @map("storage_path")
+  checksum      String
+  fileSizeBytes BigInt    @map("file_size_bytes")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parsedArtifacts ParsedArtifact[]
+
+  @@index([projectId])
+  @@map("source_files")
+}
+
+model ParsedArtifact {
+  id                 String    @id @default(uuid()) @db.Uuid
+  projectId          String    @map("project_id") @db.Uuid
+  sourceFileId       String    @map("source_file_id") @db.Uuid
+  parsedJson         Json      @map("parsed_json")
+  detectedSourceTool String?   @map("detected_source_tool")
+  warnings           Json?
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceFile      SourceFile       @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+  canonicalModels CanonicalModel[]
+
+  @@index([projectId])
+  @@map("parsed_artifacts")
+}
+
+model CanonicalModel {
+  id                String    @id @default(uuid()) @db.Uuid
+  projectId         String    @map("project_id") @db.Uuid
+  parsedArtifactId  String    @map("parsed_artifact_id") @db.Uuid
+  schemaVersion     String    @map("schema_version")
+  canonicalJson     Json      @map("canonical_json")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parsedArtifact  ParsedArtifact   @relation(fields: [parsedArtifactId], references: [id], onDelete: Cascade)
+  conversionRuns  ConversionRun[]
+
+  @@index([projectId])
+  @@map("canonical_models")
+}
+
+model ConversionRun {
+  id                String            @id @default(uuid()) @db.Uuid
+  projectId         String            @map("project_id") @db.Uuid
+  canonicalModelId  String            @map("canonical_model_id") @db.Uuid
+  targetPlatform    String            @map("target_platform")
+  targetVersion     String?           @map("target_version")
+  outputJson        Json              @map("output_json")
+  validationSummary Json              @map("validation_summary")
+  warnings          Json?
+  status            ConversionStatus
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  canonicalModel  CanonicalModel @relation(fields: [canonicalModelId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("conversion_runs")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid()) @db.Uuid
+  userId                 String             @unique @map("user_id") @db.Uuid
+  stripeSubscriptionId   String?            @map("stripe_subscription_id")
+  plan                   Plan               @default(FREE)
+  status                 SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd       DateTime?          @map("current_period_end")
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Usage {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  date              DateTime  @db.Date
+  projectsCount     Int       @default(0) @map("projects_count")
+  conversionsCount  Int       @default(0) @map("conversions_count")
+  exportsCount      Int       @default(0) @map("exports_count")
+  storageBytesUsed  BigInt    @default(0) @map("storage_bytes_used")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@map("usage")
+}
+
+model WebhookEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  stripeEventId  String   @unique @map("stripe_event_id")
+  type           String
+  receivedAt     DateTime @default(now()) @map("received_at")
+
+  @@map("webhook_events")
+}

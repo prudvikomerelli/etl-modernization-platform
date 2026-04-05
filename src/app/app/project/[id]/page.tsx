@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import ConversionTimeline from "./components/conversion-timeline";
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -129,6 +130,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           </div>
         </CardContent>
       </Card>
+
+      {/* Conversion Timeline */}
+      <ConversionTimeline projectId={project.id} />
 
       {/* Project Info */}
       <div className="grid grid-cols-2 gap-4">

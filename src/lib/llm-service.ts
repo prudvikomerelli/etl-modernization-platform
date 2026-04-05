@@ -1,4 +1,7 @@
 import { OpenAI } from "openai";
+import { LLMConfig, DEFAULT_CONFIG } from "@/lib/llm-config";
+import { enrichPromptContext } from "@/lib/prompt-context";
+import { logger } from "@/lib/logger";
 
 const openai = new OpenAI({
   apiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY,
@@ -30,7 +33,7 @@ const PROMPTS: Record<LLMTask, (content: string, context?: any) => string> = {
     ${content.slice(0, 8000)}
   `,
 
-  parse: (content) => `
+  parse: (content, context) => `
     Act as a Senior Data Engineer specializing in ETL metadata extraction. 
     Parse the provided source XML/code into a high-fidelity intermediate JSON.
     
@@ -40,7 +43,7 @@ const PROMPTS: Record<LLMTask, (content: string, context?: any) => string> = {
     3. Maintain Lineage: Record every connector/link between components (FromField/FromInstance -> ToField/ToInstance).
     4. Data Structure: Return arrays for: "sources", "targets", "transformations", "mappings", "workflows", and "connectors".
     5. Schema Mapping: Ensure every transformation has a "supported": true flag and a "fields" array.
-
+    ${context?._docsContext || ""}
     OUTPUT: Return a structured JSON representing the tool's internal AST.
     
     SOURCE CONTENT (TRUNCATED IF NECESSARY):
@@ -55,7 +58,7 @@ const PROMPTS: Record<LLMTask, (content: string, context?: any) => string> = {
     - "transformations": Standardize types to (expression, filter, joiner, aggregator, lookup, router, union, sorter).
     - "logic": Store mapping expressions in a "logic.expressions" map where key=output_field and value=expression_logic.
     - "orchestration": Extract the execution graph (tasks and dependencies).
-    
+    ${context?._docsContext || ""}
     INPUT METADATA:
     ${JSON.stringify(context?.parsedData)}
     
@@ -70,7 +73,7 @@ const PROMPTS: Record<LLMTask, (content: string, context?: any) => string> = {
     2. BEST PRACTICES: Use native operators/activities where possible (e.g., copy activities for simple movement, DataFlow for complex logic).
     3. PARAMETERIZATION: Map all canonical parameters to the target platform's native parameter system.
     4. ERROR HANDLING: Include basic retry logic and logging as per ${context?.targetPlatform} standards.
-
+    ${context?._docsContext || ""}
     CANONICAL MODEL:
     ${JSON.stringify(context?.canonical)}
     
@@ -78,11 +81,31 @@ const PROMPTS: Record<LLMTask, (content: string, context?: any) => string> = {
   `
 };
 
-export async function callLLM(task: LLMTask, content: string, context?: any) {
-  const prompt = PROMPTS[task](content, context);
+/**
+ * Call the LLM with optional user-specific configuration.
+ * Preserves existing default behavior when no config is provided.
+ */
+export async function callLLM(
+  task: LLMTask,
+  content: string,
+  context?: any,
+  config?: Partial<LLMConfig>
+) {
+  // Enrich context with documentation when available
+  const enrichedContext = enrichPromptContext(task, context);
+  const prompt = PROMPTS[task](content, enrichedContext);
+
+  const modelConfig = {
+    model: config?.model ?? (task === "detect" ? "gpt-3.5-turbo" : DEFAULT_CONFIG.model),
+    temperature: config?.temperature ?? DEFAULT_CONFIG.temperature,
+    top_p: config?.topP ?? DEFAULT_CONFIG.topP,
+    max_tokens: config?.maxTokens ?? DEFAULT_CONFIG.maxTokens,
+  };
+
+  logger.debug("LLM call", { task, model: modelConfig.model, temperature: modelConfig.temperature });
 
   const response = await openai.chat.completions.create({
-    model: task === "detect" ? "gpt-3.5-turbo" : "gpt-4o",
+    model: modelConfig.model,
     messages: [
       { 
         role: "system", 
@@ -90,10 +113,13 @@ export async function callLLM(task: LLMTask, content: string, context?: any) {
       },
       { role: "user", content: prompt }
     ],
-    response_format: { type: "json_object" }
+    response_format: { type: "json_object" },
+    temperature: modelConfig.temperature,
+    top_p: modelConfig.top_p,
+    max_tokens: modelConfig.max_tokens,
   });
 
   const result = JSON.parse(response.choices[0].message.content || "{}");
-  console.log(`LLM Task [${task}] completed.`);
+  logger.info(`LLM Task [${task}] completed`, { model: modelConfig.model });
   return result;
 }

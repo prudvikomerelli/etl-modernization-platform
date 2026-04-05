@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { User, Mail, Shield, Trash2 } from "lucide-react";
 import { getOrCreateDbUser } from "@/lib/auth";
+import AISettings from "./ai-settings";
 
 export default async function SettingsPage() {
   const dbUser = await getOrCreateDbUser();
@@ -68,6 +69,9 @@ export default async function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Advanced AI Settings */}
+      <AISettings />
 
       {/* Danger Zone */}
       <Card>

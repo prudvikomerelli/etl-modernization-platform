@@ -3,6 +3,8 @@ import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { XMLParser } from "fast-xml-parser";
+import { logger } from "@/lib/logger";
+import { startStep, completeStep, failStep } from "@/lib/step-tracker";
 
 interface PowermartSource {
   "@_NAME": string;
@@ -82,6 +84,7 @@ function toArray<T>(val: T | T[] | undefined): T[] {
 }
 
 export async function POST(request: NextRequest) {
+  let stepHandle: Awaited<ReturnType<typeof startStep>> = null;
   try {
     const contentType = request.headers.get("content-type") || "";
     let content: string;
@@ -114,8 +117,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    logger.api("/api/parse", "POST", { filename, projectId, sourceTool });
+
     const useLLM = request.nextUrl.searchParams.get("llm") !== "false";
     let parsedResult: any = {};
+    stepHandle = projectId ? await startStep(projectId, "parse", { filename, sourceTool }) : null;
 
     if (useLLM) {
       const { callLLM } = await import("@/lib/llm-service");
@@ -260,15 +266,17 @@ export async function POST(request: NextRequest) {
             data: { sourceTool },
           });
         }
-        console.log("Successfully persisted parsed artifact to DB");
+        logger.info("Successfully persisted parsed artifact to DB", { projectId });
       } catch (dbError) {
-        console.error("CRITICAL: DB storage error:", dbError);
+        logger.error("DB storage error", { projectId, error: String(dbError) });
       }
     }
 
+    await completeStep(stepHandle, { sourceCount: parsedResult.sources?.length, targetCount: parsedResult.targets?.length });
     return NextResponse.json(parsedResult);
   } catch (error) {
-    console.error("Parse error:", error);
+    logger.error("Parse error", { error: String(error) });
+    await failStep(stepHandle, String(error));
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

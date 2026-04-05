@@ -1,20 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CanonicalPipeline } from "@/types";
+import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
+import { startStep, completeStep, failStep } from "@/lib/step-tracker";
 
 export async function POST(request: NextRequest) {
+  let stepHandle = null;
   try {
     const body = await request.json();
-    const { parsedData, sourceTool, projectName } = body;
+    const { parsedData, sourceTool, projectName, projectId, parsedArtifactId } = body;
 
     if (!parsedData) {
       return NextResponse.json({ error: "No parsed data provided" }, { status: 400 });
     }
 
+    logger.api("/api/normalize", "POST", { projectId, sourceTool });
+    stepHandle = projectId ? await startStep(projectId, "normalize", { sourceTool }) : null;
+
     const useLLM = request.nextUrl.searchParams.get("llm") !== "false";
     if (useLLM) {
       const { callLLM } = await import("@/lib/llm-service");
-      const canonical = await callLLM("normalize", "", { parsedData });
-      return NextResponse.json(canonical);
+      const canonical = await callLLM("normalize", "", { parsedData, sourceTool });
+
+      // Optionally persist canonical model
+      let canonicalModelId: string | null = null;
+      if (projectId && parsedArtifactId) {
+        try {
+          const cm = await prisma.canonicalModel.create({
+            data: {
+              projectId,
+              parsedArtifactId,
+              schemaVersion: canonical.version || "1.0",
+              canonicalJson: JSON.parse(JSON.stringify(canonical)),
+            },
+          });
+          canonicalModelId = cm.id;
+          logger.info("Persisted canonical model from normalize", { projectId, canonicalModelId });
+        } catch (dbErr) {
+          logger.error("Failed to persist canonical model in normalize", { error: String(dbErr) });
+        }
+      }
+
+      await completeStep(stepHandle, { canonicalModelId });
+      return NextResponse.json({ ...canonical, canonicalModelId });
     }
 
     // Build sources from parsed SOURCE definitions
@@ -195,7 +223,7 @@ export async function POST(request: NextRequest) {
     };
 
     // Attach field-level lineage as extra metadata
-    const response = {
+    const response: Record<string, unknown> = {
       ...canonical,
       _fieldMappings: fieldMappings,
       _mappingSummary: (parsedData.mappings || []).map(
@@ -209,9 +237,30 @@ export async function POST(request: NextRequest) {
       ),
     };
 
-    return NextResponse.json(response);
+    // Optionally persist canonical model
+    let canonicalModelId: string | null = null;
+    if (projectId && parsedArtifactId) {
+      try {
+        const cm = await prisma.canonicalModel.create({
+          data: {
+            projectId,
+            parsedArtifactId,
+            schemaVersion: canonical.version || "1.0",
+            canonicalJson: JSON.parse(JSON.stringify(canonical)),
+          },
+        });
+        canonicalModelId = cm.id;
+        logger.info("Persisted canonical model from normalize", { projectId, canonicalModelId });
+      } catch (dbErr) {
+        logger.error("Failed to persist canonical model in normalize", { error: String(dbErr) });
+      }
+    }
+
+    await completeStep(stepHandle, { canonicalModelId });
+    return NextResponse.json({ ...response, canonicalModelId });
   } catch (error) {
-    console.error("Normalize error:", error);
+    logger.error("Normalize error", { error: String(error) });
+    await failStep(stepHandle, String(error));
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

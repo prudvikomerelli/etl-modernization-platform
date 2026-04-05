@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { CanonicalPipeline, TargetPlatform } from "@/types";
 import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
+import { startStep, completeStep, failStep } from "@/lib/step-tracker";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -390,9 +392,10 @@ const converters: Record<TargetPlatform, (c: any) => unknown> = {
 };
 
 export async function POST(request: NextRequest) {
+  let stepHandle = null;
   try {
     const body = await request.json();
-    const { canonical, targetPlatform, projectId, parsedArtifactId } = body;
+    const { canonical, targetPlatform, projectId, parsedArtifactId, canonicalModelId: existingCanonicalModelId } = body;
 
     if (!canonical || !targetPlatform) {
       return NextResponse.json(
@@ -401,12 +404,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    logger.api("/api/convert", "POST", { projectId, targetPlatform });
+    stepHandle = projectId ? await startStep(projectId, "convert", { targetPlatform }) : null;
+
     const useLLM = request.nextUrl.searchParams.get("llm") !== "false";
     let output;
 
     if (useLLM) {
       const { callLLM } = await import("@/lib/llm-service");
-      const llmOutput = await callLLM("convert", "", { canonical, targetPlatform });
+      const llmOutput = await callLLM("convert", "", { canonical, targetPlatform, sourceTool: canonical?.metadata?.sourceTool });
       output = llmOutput;
     } else {
       const converter = converters[targetPlatform as TargetPlatform];
@@ -420,27 +426,30 @@ export async function POST(request: NextRequest) {
     }
 
     // Persist canonical model and conversion run if projectId provided
-    let canonicalModelId: string | null = null;
+    let canonicalModelId: string | null = existingCanonicalModelId || null;
     let conversionRunId: string | null = null;
 
     if (projectId && parsedArtifactId) {
       try {
         await getOrCreateDbUser();
 
-        const canonicalModel = await prisma.canonicalModel.create({
-          data: {
-            projectId,
-            parsedArtifactId,
-            schemaVersion: canonical.version || "1.0",
-            canonicalJson: JSON.parse(JSON.stringify(canonical)),
-          },
-        });
-        canonicalModelId = canonicalModel.id;
+        // Reuse existing canonicalModelId if provided, otherwise create new
+        if (!canonicalModelId) {
+          const canonicalModel = await prisma.canonicalModel.create({
+            data: {
+              projectId,
+              parsedArtifactId,
+              schemaVersion: canonical.version || "1.0",
+              canonicalJson: JSON.parse(JSON.stringify(canonical)),
+            },
+          });
+          canonicalModelId = canonicalModel.id;
+        }
 
         const conversionRun = await prisma.conversionRun.create({
           data: {
             projectId,
-            canonicalModelId: canonicalModel.id,
+            canonicalModelId,
             targetPlatform,
             outputJson: JSON.parse(JSON.stringify(output)),
             validationSummary: {},
@@ -448,11 +457,13 @@ export async function POST(request: NextRequest) {
           },
         });
         conversionRunId = conversionRun.id;
+        logger.info("Persisted conversion run", { projectId, conversionRunId, targetPlatform });
       } catch (dbError) {
-        console.error("DB persistence error (non-fatal):", dbError);
+        logger.error("DB persistence error (non-fatal)", { error: String(dbError) });
       }
     }
 
+    await completeStep(stepHandle, { canonicalModelId, conversionRunId, targetPlatform });
     return NextResponse.json({
       targetPlatform,
       output,
@@ -461,7 +472,8 @@ export async function POST(request: NextRequest) {
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Convert error:", error);
+    logger.error("Convert error", { error: String(error) });
+    await failStep(stepHandle, String(error));
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

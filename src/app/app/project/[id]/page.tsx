@@ -25,7 +25,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     include: {
       sourceFiles: { select: { id: true } },
       parsedArtifacts: { select: { id: true } },
-      conversionRuns: { select: { id: true, status: true } },
+      conversionRuns: {
+        select: { id: true, status: true, targetPlatform: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      },
     },
   });
 
@@ -133,6 +136,60 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
       {/* Conversion Timeline */}
       <ConversionTimeline projectId={project.id} />
+
+      {/* Conversion History */}
+      {project.conversionRuns.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <span>Conversion History</span>
+              <Badge variant="info">{project.conversionRuns.length} run{project.conversionRuns.length !== 1 ? "s" : ""}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {project.conversionRuns.map((run, index) => (
+                <div
+                  key={run.id}
+                  className="flex items-center justify-between rounded-lg border border-gray-200 p-3"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`rounded-full p-1.5 ${
+                      run.status === "SUCCESS" ? "bg-green-100" :
+                      run.status === "PARTIAL" ? "bg-yellow-100" : "bg-red-100"
+                    }`}>
+                      <CheckCircle className={`h-4 w-4 ${
+                        run.status === "SUCCESS" ? "text-green-600" :
+                        run.status === "PARTIAL" ? "text-yellow-600" : "text-red-600"
+                      }`} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">
+                        Run #{project.conversionRuns.length - index}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Target: {run.targetPlatform}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={
+                      run.status === "SUCCESS" ? "success" :
+                      run.status === "PARTIAL" ? "warning" : "error"
+                    }>
+                      {run.status}
+                    </Badge>
+                    <span className="text-xs text-gray-400 flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {new Date(run.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Project Info */}
       <div className="grid grid-cols-2 gap-4">

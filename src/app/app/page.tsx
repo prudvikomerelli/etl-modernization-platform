@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import DeleteProjectButton from "./components/delete-project-button";
 
 const statusVariant: Record<string, "success" | "warning" | "error"> = {
   SUCCESS: "success",
@@ -140,6 +141,7 @@ export default async function DashboardPage() {
                       <Clock className="h-3 w-3" />
                       {new Date(project.updatedAt).toLocaleDateString()}
                     </div>
+                    <DeleteProjectButton projectId={project.id} projectName={project.name} />
                     <ArrowRight className="h-4 w-4 text-gray-400" />
                   </div>
                 </Link>

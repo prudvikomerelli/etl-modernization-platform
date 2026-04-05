@@ -14,13 +14,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No parsed data provided" }, { status: 400 });
     }
 
-    logger.api("/api/normalize", "POST", { projectId, sourceTool });
+    // Look up targetPlatform from project if available
+    let targetPlatform: string | undefined;
+    if (projectId) {
+      try {
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { targetPlatform: true },
+        });
+        targetPlatform = project?.targetPlatform || undefined;
+      } catch {
+        // Non-fatal — continue without target platform context
+      }
+    }
+
+    logger.api("/api/normalize", "POST", { projectId, sourceTool, targetPlatform });
     stepHandle = projectId ? await startStep(projectId, "normalize", { sourceTool }) : null;
 
     const useLLM = request.nextUrl.searchParams.get("llm") !== "false";
     if (useLLM) {
       const { callLLM } = await import("@/lib/llm-service");
-      const canonical = await callLLM("normalize", "", { parsedData, sourceTool });
+      const canonical = await callLLM("normalize", "", { parsedData, sourceTool, targetPlatform });
 
       // Optionally persist canonical model
       let canonicalModelId: string | null = null;

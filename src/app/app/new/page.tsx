@@ -45,6 +45,7 @@ export default function NewConversionPage() {
     setError("");
 
     try {
+      // 1. Create the project
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -61,6 +62,49 @@ export default function NewConversionPage() {
       }
 
       const { project } = await res.json();
+
+      // 2. Process the uploaded file (detect source + parse) so user doesn't upload twice
+      if (file) {
+        const content = await file.text();
+
+        const [detectRes, parseRes] = await Promise.all([
+          fetch("/api/detect-source?llm=true", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content, filename: file.name }),
+          }),
+          fetch("/api/parse?llm=true", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              content,
+              filename: file.name,
+              projectId: project.id,
+              fileSize: file.size,
+            }),
+          }),
+        ]);
+
+        // Update project with detected source tool if successful
+        if (detectRes.ok) {
+          const detectData = await detectRes.json();
+          if (detectData.tool) {
+            await fetch(`/api/projects/${project.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sourceTool: detectData.tool }),
+            });
+          }
+        }
+
+        // If parse succeeded, skip upload and go directly to parse results
+        if (parseRes.ok) {
+          router.push(`/app/project/${project.id}/parse`);
+          return;
+        }
+      }
+
+      // Fallback: go to upload page if file processing failed or no file
       router.push(`/app/project/${project.id}/upload`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -210,7 +254,7 @@ export default function NewConversionPage() {
             size="lg"
             disabled={!projectName || !file || !selectedTarget || loading}
           >
-            {loading ? "Creating..." : "Start Conversion"}
+            {loading ? "Processing…" : "Start Conversion"}
             {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
           </Button>
         </div>

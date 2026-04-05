@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     if (useLLM) {
       const { callLLM } = await import("@/lib/llm-service");
-      const llmResponse = await callLLM("parse", content);
+      const llmResponse = await callLLM("parse", content, { sourceTool });
       
       // Flexible extraction with alias mapping
       const base = llmResponse.data || llmResponse.parsedResult || llmResponse;

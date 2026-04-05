@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import ArtifactSelector from "./components/artifact-selector";
 
 interface ParsedData {
   mappings?: Array<{
@@ -46,20 +47,33 @@ interface ParsedData {
   metadata?: { repositoryName: string; folderName: string; creationDate: string };
 }
 
-export default async function ParsePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ParsePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ artifactId?: string }> }) {
   const { id } = await params;
+  const { artifactId } = await searchParams;
   const dbUser = await getOrCreateDbUser();
 
   const project = await prisma.project.findFirst({
     where: { id, userId: dbUser.id },
     include: {
-      parsedArtifacts: { orderBy: { createdAt: "desc" }, take: 1 },
+      parsedArtifacts: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          parsedJson: true,
+          detectedSourceTool: true,
+          createdAt: true,
+        },
+      },
     },
   });
 
   if (!project) notFound();
 
-  const artifact = project.parsedArtifacts[0];
+  // Select artifact: use URL param if provided, otherwise latest
+  const allArtifacts = project.parsedArtifacts;
+  const artifact = artifactId
+    ? allArtifacts.find((a) => a.id === artifactId) || allArtifacts[0]
+    : allArtifacts[0];
 
   if (!artifact) {
     return (
@@ -108,6 +122,18 @@ export default async function ParsePage({ params }: { params: Promise<{ id: stri
           </Button>
         </Link>
       </div>
+
+      {/* Parse History Selector */}
+      {allArtifacts.length > 0 && (
+        <ArtifactSelector
+          artifacts={allArtifacts.map((a) => ({
+            id: a.id,
+            detectedSourceTool: a.detectedSourceTool,
+            createdAt: a.createdAt.toISOString(),
+          }))}
+          selectedId={artifact.id}
+        />
+      )}
 
       {/* Metadata */}
       {parsed.metadata && (
@@ -194,8 +220,8 @@ export default async function ParsePage({ params }: { params: Promise<{ id: stri
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {wf.tasks.map((task, i) => (
-                    <div key={task} className="flex items-center gap-1">
-                      <span className="rounded bg-gray-100 px-2.5 py-1 text-xs font-mono text-gray-700">{task}</span>
+                    <div key={`${wf.name}-task-${i}`} className="flex items-center gap-1">
+                      <span className="rounded bg-gray-100 px-2.5 py-1 text-xs font-mono text-gray-700">{typeof task === 'string' ? task : JSON.stringify(task)}</span>
                       {i < wf.tasks.length - 1 && <ArrowRight className="h-3 w-3 text-gray-400" />}
                     </div>
                   ))}
